@@ -3,6 +3,7 @@ import requests
 import os
 import sys
 from typing import List, Dict
+import json
 
 class MilestonesAndIssuesSync:
     def __init__(self, github_token):
@@ -121,66 +122,114 @@ class MilestonesAndIssuesSync:
         
         return issues
 
-    def sync_issue(self, owner, repo, issue, target_owner, target_repo, new_milestone_number=None):
-        """Create or update issue in target repository"""
+    def sync_issue_with_same_number(self, owner, repo, issue, target_owner, target_repo, new_milestone_number=None):
+        """
+        Sync issue while preserving the issue number.
+        Creates dummy issues to match issue numbers if needed.
+        """
+        source_issue_number = issue["number"]
         url = f"{self.base_url}/repos/{target_owner}/{target_repo}/issues"
         
-        payload = {
-            "title": issue["title"],
-            "body": issue.get("body", ""),
-            "labels": [label["name"] for label in issue.get("labels", [])],
-            "milestone": new_milestone_number,
-            "state": issue.get("state", "open")
-        }
+        # First, check if issue already exists in target
+        existing_issue = self.get_issue_by_number(target_owner, target_repo, source_issue_number)
         
-        # Remove None values
-        payload = {k: v for k, v in payload.items() if v is not None}
-        
-        # Check if issue already exists by title
-        existing = self.get_issue_by_title(target_owner, target_repo, issue["title"])
-        
-        if existing:
+        if existing_issue:
             # Update existing issue
-            update_url = f"{self.base_url}/repos/{target_owner}/{target_repo}/issues/{existing['number']}"
+            update_url = f"{url}/{source_issue_number}"
+            payload = {
+                "title": issue["title"],
+                "body": issue.get("body", ""),
+                "labels": [label["name"] for label in issue.get("labels", [])],
+                "milestone": new_milestone_number,
+                "state": issue.get("state", "open")
+            }
+            payload = {k: v for k, v in payload.items() if v is not None}
+            
             response = requests.patch(update_url, headers=self.headers, json=payload)
             
             if response.status_code == 200:
-                new_issue = response.json()
-                self.issue_mapping[issue["number"]] = new_issue["number"]
-                print(f"  ✅ Synced issue: {issue['title']} (#{new_issue['number']})")
-                return new_issue
+                synced_issue = response.json()
+                self.issue_mapping[source_issue_number] = synced_issue["number"]
+                print(f"  ✅ Synced issue: #{source_issue_number} - {issue['title']}")
+                return synced_issue
             else:
-                print(f"  ❌ Error syncing issue '{issue['title']}': {response.status_code}")
+                print(f"  ❌ Error syncing issue #{source_issue_number}: {response.status_code}")
                 return None
         else:
-            # Create new issue
+            # Get the current highest issue number in target
+            highest_issue_number = self.get_highest_issue_number(target_owner, target_repo)
+            
+            # Create dummy issues to match the source issue number
+            if highest_issue_number < source_issue_number:
+                print(f"  📝 Creating placeholder issues to reach ##{source_issue_number}...")
+                for i in range(highest_issue_number + 1, source_issue_number):
+                    dummy_payload = {
+                        "title": f"[PLACEHOLDER] Issue #{i}",
+                        "body": "This is a placeholder issue created to maintain issue numbering consistency.",
+                    }
+                    dummy_response = requests.post(url, headers=self.headers, json=dummy_payload)
+                    if dummy_response.status_code != 201:
+                        print(f"    ⚠️  Failed to create placeholder issue #{i}")
+            
+            # Now create the actual issue
+            payload = {
+                "title": issue["title"],
+                "body": issue.get("body", ""),
+                "labels": [label["name"] for label in issue.get("labels", [])],
+                "milestone": new_milestone_number,
+                "state": issue.get("state", "open")
+            }
+            payload = {k: v for k, v in payload.items() if v is not None}
+            
             response = requests.post(url, headers=self.headers, json=payload)
             
             if response.status_code == 201:
                 new_issue = response.json()
-                self.issue_mapping[issue["number"]] = new_issue["number"]
-                print(f"  ✅ Created issue: {issue['title']} (#{new_issue['number']})")
+                actual_number = new_issue["number"]
+                
+                # If the created issue doesn't match the source number, we have a problem
+                if actual_number != source_issue_number:
+                    print(f"  ⚠️  Issue created as #{actual_number} instead of #{source_issue_number}")
+                
+                self.issue_mapping[source_issue_number] = actual_number
+                print(f"  ✅ Created issue: #{actual_number} - {issue['title']}")
                 return new_issue
             else:
-                print(f"  ❌ Error creating issue '{issue['title']}': {response.status_code}")
+                print(f"  ❌ Error creating issue: {response.status_code}")
+                print(f"     Response: {response.json()}")
                 return None
 
-    def get_issue_by_title(self, owner, repo, title):
-        """Find an existing issue by title"""
+    def get_issue_by_number(self, owner, repo, issue_number):
+        """Get a specific issue by number"""
+        url = f"{self.base_url}/repos/{owner}/{repo}/issues/{issue_number}"
+        response = requests.get(url, headers=self.headers)
+        
+        if response.status_code == 200:
+            return response.json()
+        return None
+
+    def get_highest_issue_number(self, owner, repo):
+        """Get the highest issue number in a repository"""
         url = f"{self.base_url}/repos/{owner}/{repo}/issues"
-        params = {"state": "all", "per_page": 100}
+        params = {
+            "state": "all",
+            "per_page": 1,
+            "page": 1,
+            "sort": "created",
+            "direction": "desc"
+        }
         response = requests.get(url, headers=self.headers, params=params)
         
         if response.status_code == 200:
-            for issue in response.json():
-                if issue["title"] == title:
-                    return issue
-        return None
+            data = response.json()
+            if data:
+                return data[0]["number"]
+        return 0
 
     def sync_bidirectional(self, source_owner, source_repo, target_owner, target_repo):
-        """Sync milestones and issues bidirectionally"""
+        """Sync milestones and issues bidirectionally with same issue numbers"""
         print(f"\n{'='*60}")
-        print(f"🔄 Starting Bi-directional Sync")
+        print(f"🔄 Starting Bi-directional Sync (Same Issue Numbers)")
         print(f"{'='*60}\n")
         
         milestone_mapping = {}
@@ -204,7 +253,7 @@ class MilestonesAndIssuesSync:
         
         # Step 2: Sync issues associated with milestones
         print(f"{'='*60}")
-        print("📝 Syncing Issues")
+        print("📝 Syncing Issues (Preserving Issue Numbers)")
         print(f"{'='*60}\n")
         
         total_issues = 0
@@ -222,14 +271,17 @@ class MilestonesAndIssuesSync:
                 # Get the new milestone number from mapping
                 new_milestone_number = milestone_mapping.get(milestone_number)
                 
-                for issue in issues:
+                # Sort issues by number to create them in order
+                issues_sorted = sorted(issues, key=lambda x: x["number"])
+                
+                for issue in issues_sorted:
                     total_issues += 1
-                    if self.sync_issue(source_owner, source_repo, issue, target_owner, target_repo, new_milestone_number):
+                    if self.sync_issue_with_same_number(source_owner, source_repo, issue, target_owner, target_repo, new_milestone_number):
                         synced_issues += 1
                 
                 print()
         
-        # Step 3: Create mapping file for reverse sync
+        # Step 3: Save mappings
         self.save_mappings(source_owner, source_repo, target_owner, target_repo)
         
         # Summary
@@ -238,20 +290,22 @@ class MilestonesAndIssuesSync:
         print(f"{'='*60}")
         print(f"Milestones synced: {synced_milestones}")
         print(f"Issues synced: {synced_issues}/{total_issues}")
-        print(f"\n📌 Note: Changes made to issues in {target_owner}/{target_repo}")
-        print(f"   can be synced back to {source_owner}/{source_repo}")
+        print(f"\n📌 Note: Issues now have the SAME numbers in both repos")
+        print(f"   {source_owner}/{source_repo} <--> {target_owner}/{target_repo}")
         print(f"{'='*60}\n")
 
     def save_mappings(self, source_owner, source_repo, target_owner, target_repo):
-        """Save issue mappings for reverse sync"""
+        """Save issue mappings for future reference"""
         mapping_data = {
             "source": f"{source_owner}/{source_repo}",
             "target": f"{target_owner}/{target_repo}",
-            "issue_mappings": self.issue_mapping
+            "issue_mappings": self.issue_mapping,
+            "timestamp": __import__('datetime').datetime.now().isoformat()
         }
         
-        # Save to a file in the repository
-        import json
+        # Ensure directory exists
+        os.makedirs(".github", exist_ok=True)
+        
         with open(".github/issue-mappings.json", "w") as f:
             json.dump(mapping_data, f, indent=2)
         
@@ -266,6 +320,11 @@ def main():
     
     if not all([github_token, source_owner, source_repo, target_owner, target_repo]):
         print("❌ Missing required environment variables")
+        print(f"  GITHUB_TOKEN: {bool(github_token)}")
+        print(f"  SOURCE_OWNER: {bool(source_owner)}")
+        print(f"  SOURCE_REPO: {bool(source_repo)}")
+        print(f"  TARGET_OWNER: {bool(target_owner)}")
+        print(f"  TARGET_REPO: {bool(target_repo)}")
         sys.exit(1)
     
     syncer = MilestonesAndIssuesSync(github_token)
