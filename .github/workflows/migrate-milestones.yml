@@ -33,7 +33,7 @@ jobs:
 
       - name: Migrate milestones
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.MILESTONE_TOKEN }}
           SOURCE_OWNER: ${{ github.event.inputs.source_owner }}
           SOURCE_REPO: ${{ github.event.inputs.source_repo }}
           TARGET_OWNER: ${{ github.event.inputs.target_owner }}
