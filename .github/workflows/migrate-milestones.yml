@@ -1,4 +1,4 @@
-name: Migrate Milestones
+name: Migrate Milestones and Issues
 
 on:
   workflow_dispatch:
@@ -6,15 +6,19 @@ on:
       source_owner:
         description: 'Source repository owner'
         required: true
+        default: 'MichelleTsai'
       source_repo:
         description: 'Source repository name'
         required: true
+        default: 'UI-Interface'
       target_owner:
         description: 'Target repository owner'
         required: true
+        default: 'MichelleTsai'
       target_repo:
         description: 'Target repository name'
         required: true
+        default: 'Centralized-project'
 
 jobs:
   migrate:
@@ -31,11 +35,11 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Migrate milestones
+      - name: Migrate milestones and issues
         env:
           GITHUB_TOKEN: ${{ secrets.MILESTONE_TOKEN }}
           SOURCE_OWNER: ${{ github.event.inputs.source_owner }}
           SOURCE_REPO: ${{ github.event.inputs.source_repo }}
           TARGET_OWNER: ${{ github.event.inputs.target_owner }}
           TARGET_REPO: ${{ github.event.inputs.target_repo }}
-        run: python migrate_milestones.py
+        run: python migrate_milestones_and_issues.py
