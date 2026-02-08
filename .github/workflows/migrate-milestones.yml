@@ -1,4 +1,4 @@
-name: Migrate Milestones and Issues
+name: Sync Milestones and Issues Bi-directionally
 
 on:
   workflow_dispatch:
@@ -19,9 +19,12 @@ on:
         description: 'Target repository name'
         required: true
         default: 'Centralized-project'
+  schedule:
+    # Run sync every 6 hours
+    - cron: '0 */6 * * *'
 
 jobs:
-  migrate:
+  sync:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -35,11 +38,19 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Migrate milestones and issues
+      - name: Sync milestones and issues bidirectionally
         env:
           GITHUB_TOKEN: ${{ secrets.MILESTONE_TOKEN }}
-          SOURCE_OWNER: ${{ github.event.inputs.source_owner }}
-          SOURCE_REPO: ${{ github.event.inputs.source_repo }}
-          TARGET_OWNER: ${{ github.event.inputs.target_owner }}
-          TARGET_REPO: ${{ github.event.inputs.target_repo }}
-        run: python migrate_milestones_and_issues.py
+          SOURCE_OWNER: ${{ github.event.inputs.source_owner || 'MichelleTsai' }}
+          SOURCE_REPO: ${{ github.event.inputs.source_repo || 'UI-Interface' }}
+          TARGET_OWNER: ${{ github.event.inputs.target_owner || 'MichelleTsai' }}
+          TARGET_REPO: ${{ github.event.inputs.target_repo || 'Centralized-project' }}
+        run: python sync_milestones_and_issues.py
+
+      - name: Commit mappings
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .github/issue-mappings.json 2>/dev/null || true
+          git commit -m "Update issue mappings from sync" 2>/dev/null || true
+          git push 2>/dev/null || true
